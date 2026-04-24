@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mic, Send, ArrowLeft, User, Loader2, MapPin, Calendar, Quote, Award, BookOpen, ChevronRight, Info, X } from 'lucide-react';
 import { NPCS, NPC } from '../types';
-import { chatWithNpc, submitLog } from '../services/apiClient';
+import { chatWithNpc } from '../services/apiClient';
 
 interface Message {
   role: 'user' | 'model';
@@ -11,11 +11,12 @@ interface Message {
 
 interface DialogueScreenProps {
   sceneId?: string;
+  userName: string;
   onNpcInteract: (npcName: string) => void;
   onNpcSelect: (active: boolean) => void;
 }
 
-const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract, onNpcSelect }) => {
+const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, userName, onNpcInteract, onNpcSelect }) => {
   const [selectedNpc, setSelectedNpc] = useState<NPC | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -47,25 +48,18 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
     if (!inputValue.trim() || !selectedNpc || isLoading) return;
 
     const userMessage = inputValue.trim();
+    const activeSceneId = sceneId || selectedNpc.relatedScenes?.[0] || 'dialogue';
     setInputValue('');
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsLoading(true);
 
     try {
-      if (sceneId) {
-        await submitLog(sceneId, `User said to ${selectedNpc.name}: ${userMessage}`);
-      }
-
       const history = messages.map(m => ({
         role: m.role,
         parts: [{ text: m.content }]
       }));
 
-      const response = await chatWithNpc(selectedNpc.id, sceneId || '1937', history, userMessage);
-      
-      if (sceneId) {
-        await submitLog(sceneId, `${selectedNpc.name} replied: ${response}`);
-      }
+      const response = await chatWithNpc(selectedNpc.id, activeSceneId, history, userMessage, userName);
       
       setMessages(prev => [...prev, { role: 'model', content: response }]);
     } catch (err) {
@@ -78,14 +72,14 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
 
   if (!selectedNpc) {
     return (
-      <div className="min-h-screen pt-20 pb-20 px-6 flex flex-col items-center">
+      <div className="min-h-screen pt-20 pb-20 px-4 sm:px-6 flex flex-col items-center">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="text-center mb-12"
         >
-          <h1 className="text-5xl md:text-7xl font-headline italic tracking-tighter text-on-surface mb-4">时代人物对话</h1>
-          <p className="text-tertiary font-headline italic text-xl opacity-60">跨越时空，与历史的见证者面对面。</p>
+          <h1 className="text-[clamp(2.2rem,5vw,4.8rem)] font-headline italic tracking-tighter text-on-surface mb-4">时代人物对话</h1>
+          <p className="text-tertiary font-headline italic text-[clamp(1rem,2vw,1.25rem)] opacity-60">跨越时空，与历史的见证者面对面。</p>
         </motion.div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-5xl">
@@ -96,10 +90,10 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.1 }}
               onClick={() => handleSelectNpc(npc)}
-              className="bg-surface-container-highest border border-white/5 group cursor-pointer overflow-hidden relative flex flex-row"
+              className="bg-surface-container-highest border border-white/5 group cursor-pointer overflow-hidden relative flex flex-col sm:flex-row"
             >
               {/* 左侧头像 */}
-              <div className="w-40 h-48 flex-shrink-0 relative overflow-hidden">
+              <div className="w-full h-52 sm:w-40 sm:h-48 flex-shrink-0 relative overflow-hidden">
                 <img
                   src={npc.avatar}
                   alt={npc.name}
@@ -113,12 +107,12 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
               </div>
 
               {/* 右侧信息 */}
-              <div className="flex-1 p-5 flex flex-col justify-between">
+              <div className="flex-1 p-4 sm:p-5 flex flex-col justify-between">
                 <div>
                   {/* 姓名、职衔 */}
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-2">
                     <div>
-                      <div className="text-primary font-headline italic text-2xl">{npc.name}</div>
+                      <div className="text-primary font-headline italic text-[clamp(1.4rem,2.2vw,1.9rem)]">{npc.name}</div>
                       <div className="text-xs text-tertiary font-label uppercase tracking-widest">{npc.title}</div>
                     </div>
                     <div className="flex items-center gap-1 text-xs text-tertiary/60 font-label">
@@ -173,25 +167,25 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
       {/* 主聊天区域 */}
       <div className="flex-1 flex flex-col relative">
         {/* Chat Header */}
-        <div className="relative z-10 px-8 py-6 bg-surface-container border-b border-white/5 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+        <div className="relative z-10 px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6 bg-surface-container border-b border-white/5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <button
               onClick={handleBack}
               className="p-2 text-tertiary hover:text-primary transition-colors"
             >
               <ArrowLeft className="w-6 h-6" />
             </button>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3 sm:gap-4 min-w-0">
               <div className="w-12 h-12 bg-surface-container-highest overflow-hidden border border-primary/20">
                 <img src={selectedNpc.avatar} alt={selectedNpc.name} className="w-full h-full object-cover grayscale" referrerPolicy="no-referrer" onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/48/1a1a1a/666666?text=' + selectedNpc.name; }} />
               </div>
               <div>
-                <div className="text-xl font-headline italic text-primary">{selectedNpc.name}</div>
+                <div className="text-lg sm:text-xl font-headline italic text-primary truncate">{selectedNpc.name}</div>
                 <div className="text-[10px] text-tertiary font-label uppercase tracking-widest">{selectedNpc.title}</div>
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 sm:gap-4 ml-auto">
             <button
               onClick={() => setShowInfo(!showInfo)}
               className={`p-2 transition-colors ${showInfo ? 'text-primary' : 'text-tertiary hover:text-primary'}`}
@@ -207,7 +201,7 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
       {/* Chat Messages */}
       <div 
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar relative"
+        className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 sm:space-y-8 custom-scrollbar relative"
       >
         <div className="absolute inset-0 z-0 opacity-5 pointer-events-none">
           <img src={selectedNpc.avatar} alt="" className="w-full h-full object-cover grayscale" referrerPolicy="no-referrer" />
@@ -220,12 +214,12 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
             animate={{ opacity: 1, y: 0 }}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} relative z-10`}
           >
-            <div className={`max-w-[80%] md:max-w-[60%] flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+            <div className={`max-w-[92%] sm:max-w-[85%] lg:max-w-[60%] flex gap-3 sm:gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
               <div className="w-10 h-10 flex-shrink-0 bg-surface-container-highest flex items-center justify-center border border-white/5">
                 {msg.role === 'user' ? <User className="w-5 h-5 text-tertiary" /> : <img src={selectedNpc.avatar} alt="" className="w-full h-full object-cover grayscale" referrerPolicy="no-referrer" />}
               </div>
               <div className={`p-4 ${msg.role === 'user' ? 'bg-primary/10 border-r-2 border-primary' : 'bg-surface-container-high border-l-2 border-primary-container'} shadow-xl`}>
-                <p className="text-lg font-body leading-relaxed text-on-surface whitespace-pre-wrap">
+                <p className="text-base sm:text-lg font-body leading-relaxed text-on-surface whitespace-pre-wrap">
                   {msg.content}
                 </p>
               </div>
@@ -248,7 +242,7 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
       </div>
 
       {/* Chat Input */}
-      <div className="relative z-10 p-8 bg-surface-container border-t border-white/5">
+      <div className="relative z-10 p-4 sm:p-6 lg:p-8 bg-surface-container border-t border-white/5">
         <div className="max-w-4xl mx-auto relative">
           <div className="flex items-end gap-4 border-b border-on-surface-variant/20 py-2 focus-within:border-primary transition-colors">
             <textarea
@@ -261,7 +255,7 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
                   handleSendMessage();
                 }
               }}
-              className="w-full bg-transparent border-none text-xl font-body text-on-surface placeholder:text-tertiary/30 focus:ring-0 focus:outline-none py-2 resize-none max-h-32" 
+              className="w-full bg-transparent border-none text-base sm:text-lg lg:text-xl font-body text-on-surface placeholder:text-tertiary/30 focus:ring-0 focus:outline-none py-2 resize-none max-h-32" 
               placeholder="跨越时空，输入你想说的话..."
             />
             <div className="flex items-center gap-2 pb-2">
@@ -277,7 +271,7 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
               </button>
             </div>
           </div>
-          <div className="mt-4 flex justify-between items-center font-label text-[10px] uppercase tracking-widest opacity-40">
+          <div className="mt-4 flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center font-label text-[10px] uppercase tracking-widest opacity-40">
             <span>当前链路：历史档案库 - 深度交互模式</span>
             <span>AI 智能辅助对话</span>
           </div>
@@ -293,9 +287,9 @@ const DialogueScreen: React.FC<DialogueScreenProps> = ({ sceneId, onNpcInteract,
             animate={{ width: 320, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="bg-surface-container border-l border-white/5 overflow-hidden flex-shrink-0"
+            className="bg-surface-container border-l border-white/5 overflow-hidden flex-shrink-0 w-full max-w-[85vw] sm:max-w-[20rem]"
           >
-            <div className="w-80 h-full overflow-y-auto custom-scrollbar">
+            <div className="w-full h-full overflow-y-auto custom-scrollbar">
               {/* 头像和基本信息 */}
               <div className="relative h-48 overflow-hidden">
                 <img

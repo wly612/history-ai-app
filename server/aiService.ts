@@ -20,6 +20,42 @@ if (PROXY_URL) {
 }
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY || '' });
+const PRIMARY_MODEL = 'gemini-2.5-flash';
+const FALLBACK_MODEL = 'gemini-2.5-flash-lite';
+const RETRYABLE_STATUS = new Set([429, 500, 503]);
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function generateWithRetry(
+  request: Omit<Parameters<typeof ai.models.generateContent>[0], 'model'>,
+  models: string[] = [PRIMARY_MODEL, FALLBACK_MODEL]
+) {
+  let lastError: any;
+
+  for (const model of models) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await ai.models.generateContent({
+          ...request,
+          model,
+        });
+      } catch (err: any) {
+        lastError = err;
+        const status = err?.status;
+        const isRetryable = RETRYABLE_STATUS.has(status);
+        const isLastAttempt = attempt === 2;
+
+        if (!isRetryable || isLastAttempt) {
+          break;
+        }
+
+        await sleep(800 * (attempt + 1));
+      }
+    }
+  }
+
+  throw lastError;
+}
 
 // RAG 配置
 const RAG_ENABLED = process.env.RAG_ENABLED === 'true';
@@ -31,13 +67,14 @@ export async function chatWithHistoricalFigure(
   sceneId: string, 
   history: any[], 
   message: string,
-  options: { useRAG?: boolean } = {}
+  options: { useRAG?: boolean; userName?: string } = {}
 ) {
   const npc = NPCS.find((n) => n.id === npcId);
   if (!npc) throw new Error("NPC not found");
 
   const node = HISTORICAL_NODES.find(n => n.id === sceneId);
-  const context = node ? `当前历史场景：${node.year}年 ${node.title}（${node.description}）。用户扮演的角色是：${node.identity}。玩家正向你提问。` : '';
+  const learnerName = options.userName?.trim() || '这位馆员';
+  const context = node ? `当前历史场景：${node.year}年 ${node.title}（${node.description}）。用户扮演的角色是：${node.identity}。玩家账号名是：${learnerName}。请在称呼对方时优先使用这个账号名，不要使用任何占位符或系统变量名。玩家正向你提问。` : `玩家账号名是：${learnerName}。请在称呼对方时优先使用这个账号名，不要使用任何占位符或系统变量名。`;
 
   let enhancedMessage = message;
   let retrievedContext = '';
@@ -72,8 +109,7 @@ export async function chatWithHistoricalFigure(
     console.log('[AI] 代理设置 - HTTP_PROXY:', process.env.HTTP_PROXY || '未设置');
     console.log('[AI] 代理设置 - HTTPS_PROXY:', process.env.HTTPS_PROXY || '未设置');
 
-    const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+    const response = await generateWithRetry({
       contents: [
         ...history,
         { role: 'user', parts: [{ text: enhancedMessage }] }
@@ -83,7 +119,10 @@ export async function chatWithHistoricalFigure(
       },
     });
     console.log('[AI] API 调用成功');
-    return response.text;
+    return (response.text || '抱歉，我的时空连接受到干扰，请稍后再试。')
+      .replace(/<seg_\d+>/gi, learnerName)
+      .replace(/<user_name>/gi, learnerName)
+      .replace(/\b玩家\b/g, learnerName);
   } catch (err: any) {
     console.error("=== AI Chat Error ===");
     console.error("错误类型:", err.constructor?.name);
@@ -110,8 +149,7 @@ export async function generateSceneDescription(sceneId: string) {
   4. 结尾留有悬念，引导用户开始行动。`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
     return response.text;
@@ -148,8 +186,7 @@ export async function generateDynamicQuiz(sceneId: string, logs: string[]) {
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
         responseMimeType: "application/json",
@@ -189,8 +226,7 @@ export async function analyzePersonaLog(logs: string[]) {
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
         responseMimeType: "application/json",
@@ -242,8 +278,7 @@ ${aiPromptHint}
 4. 不要输出任何额外的说明或标记`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
     return response.text || "历史的迷雾笼罩了一切...";
@@ -272,8 +307,7 @@ export async function generateChoiceConsequence(
 3. 制造悬念感`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
     return response.text || "你做出了选择...";
@@ -321,8 +355,7 @@ ${choices.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 3. 提供历史启示或学习建议`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
     return response.text || "历史的审判已经结束...";

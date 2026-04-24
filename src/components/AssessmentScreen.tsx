@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Check, X, BarChart3, ArrowLeft, ArrowRight, Trophy, BookOpen, RefreshCw, Target, ShieldAlert } from 'lucide-react';
 import { getQuestionsForScene, getQuestionBankStats, sceneQuestionMap } from '../data/questions';
-import { HISTORICAL_NODES } from '../types';
+import { AppState, HISTORICAL_NODES } from '../types';
+import { submitLog } from '../services/apiClient';
 
 interface Question {
   id: string;
@@ -21,11 +22,13 @@ interface AnswerRecord {
 
 interface AssessmentScreenProps {
   sceneId?: string;
-  onComplete: (incorrectIds: string[]) => void;
+  appState: AppState;
+  focusQuestionId?: string;
+  onComplete: (incorrectIds: string[], sceneId?: string) => void;
   onBack?: () => void;
 }
 
-export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: propSceneId, onComplete, onBack }) => {
+export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: propSceneId, appState, onComplete, onBack }) => {
   // 如果传入了sceneId，直接进入该场景的测试
   const [selectedSceneId, setSelectedSceneId] = useState<string | null>(propSceneId || null);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -34,6 +37,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
   const [showReport, setShowReport] = useState(false);
   const [answers, setAnswers] = useState<AnswerRecord[]>([]);
   const [phase, setPhase] = useState<'select' | 'quiz' | 'result'>(propSceneId ? 'quiz' : 'select');
+  const [isFinishing, setIsFinishing] = useState(false);
 
   // 获取题库统计
   const stats = getQuestionBankStats();
@@ -56,6 +60,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
     setSelectedOptions([]);
     setShowReport(false);
     setAnswers([]);
+    setIsFinishing(false);
     setPhase('quiz');
   };
 
@@ -74,6 +79,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
     setSelectedOptions([]);
     setShowReport(false);
     setAnswers([]);
+    setIsFinishing(false);
     setPhase('select');
   };
 
@@ -136,9 +142,43 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
     }
   };
 
-  const handleFinish = () => {
+  const buildAssessmentLog = () => {
+    const sceneName = currentScene ? `${currentScene.year} · ${currentScene.title}` : selectedSceneId || '未知场景';
+    const answerDetails = answers.map((answer, index) => {
+      const question = questions.find(q => q.id === answer.questionId);
+      const selectedTexts = answer.selectedOptions
+        .map(optionId => {
+          const option = question?.options.find(o => o.id === optionId);
+          return option ? `${optionId}.${option.text}` : optionId;
+        })
+        .join('、') || '未选择';
+
+      return `第${index + 1}题《${question?.title || answer.questionId}》选择：${selectedTexts}，结果：${answer.isCorrect ? '正确' : '错误'}`;
+    }).join('；');
+
+    return {
+      summary: `[文献评估完成] ${sceneName}，得分 ${score} 分，答对 ${correctCount}/${totalQuestions} 题。`,
+      details: `[文献评估作答详情] ${answerDetails}`
+    };
+  };
+
+  const handleFinish = async () => {
+    if (isFinishing) return;
+    setIsFinishing(true);
+
     const incorrectIds = answers.filter(a => !a.isCorrect).map(a => a.questionId);
-    onComplete(incorrectIds);
+
+    if (selectedSceneId) {
+      try {
+        const logs = buildAssessmentLog();
+        await submitLog(selectedSceneId, logs.summary);
+        await submitLog(selectedSceneId, logs.details);
+      } catch (err) {
+        console.error('Failed to submit assessment logs:', err);
+      }
+    }
+
+    onComplete(incorrectIds, selectedSceneId || undefined);
   };
 
   // 计算得分
@@ -156,7 +196,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
   // ==================== 场景选择页面 ====================
   if (phase === 'select') {
     return (
-      <div className="min-h-screen pt-24 pb-24 px-6">
+      <div className="min-h-screen pt-24 pb-24 px-4 sm:px-6">
         {onBack && (
           <button
             onClick={onBack}
@@ -175,7 +215,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
           <div className="text-center mb-12">
             <div className="flex items-center justify-center gap-3 mb-4">
               <BookOpen className="w-8 h-8 text-primary" />
-              <h1 className="text-5xl md:text-6xl font-headline italic tracking-tighter text-on-surface">文献评估</h1>
+              <h1 className="text-[clamp(2.1rem,5vw,4.2rem)] font-headline italic tracking-tighter text-on-surface">文献评估</h1>
             </div>
             <p className="text-tertiary font-headline italic text-lg opacity-60">选择场景，开启专属考核</p>
           </div>
@@ -196,6 +236,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
             {HISTORICAL_NODES.map((node, index) => {
               const questionCount = sceneQuestionMap[node.id]?.length || 0;
               const isAvailable = questionCount > 0;
+              const isAssessed = (appState.assessedScenes || []).includes(node.id);
 
               return (
                 <motion.div
@@ -218,10 +259,17 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
                     <img
                       src={node.image}
                       alt={node.alt}
-                      className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-500"
+                      className={`w-full h-full object-cover transition-all duration-500 ${
+                        isAssessed ? 'grayscale-0 saturate-110' : 'grayscale group-hover:grayscale-0'
+                      }`}
                       referrerPolicy="no-referrer"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-surface-container-highest via-transparent to-transparent" />
+                    {isAssessed && (
+                      <div className="absolute right-3 top-3 border border-primary/40 bg-primary/15 px-2 py-1 text-[10px] font-label tracking-widest text-primary">
+                        已评估
+                      </div>
+                    )}
                   </div>
 
                   {/* 内容 */}
@@ -259,7 +307,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
   // ==================== 结果页面 ====================
   if (phase === 'result') {
     return (
-      <div className="pt-20 pb-20 px-6 flex flex-col items-center justify-center min-h-screen">
+      <div className="pt-20 pb-20 px-4 sm:px-6 flex flex-col items-center justify-center min-h-screen">
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -272,7 +320,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
               }`}>
                 <Trophy className={`w-10 h-10 ${score >= 60 ? 'text-primary' : 'text-red-500'}`} />
               </div>
-              <h2 className="text-3xl font-headline italic text-on-surface mb-2">考核完成</h2>
+              <h2 className="text-[clamp(1.8rem,3vw,2.25rem)] font-headline italic text-on-surface mb-2">考核完成</h2>
               {currentScene && (
                 <p className="text-tertiary font-headline text-sm">{currentScene.year} · {currentScene.title}</p>
               )}
@@ -280,7 +328,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
 
             {/* 分数 */}
             <div className="flex justify-center mb-8">
-              <div className="relative w-40 h-40">
+              <div className="relative w-32 h-32 sm:w-40 sm:h-40">
                 <svg className="w-full h-full transform -rotate-90">
                   <circle cx="80" cy="80" r="70" fill="none" stroke="currentColor" strokeWidth="8" className="text-surface-container-high" />
                   <circle
@@ -292,7 +340,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
                   />
                 </svg>
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className={`text-4xl font-headline font-bold ${score >= 60 ? 'text-primary' : 'text-red-500'}`}>
+                  <span className={`text-3xl sm:text-4xl font-headline font-bold ${score >= 60 ? 'text-primary' : 'text-red-500'}`}>
                     {score}
                   </span>
                   <span className="text-xs text-tertiary font-label">分</span>
@@ -365,9 +413,12 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
               </button>
               <button
                 onClick={handleFinish}
-                className="flex-1 py-4 bg-surface-container text-on-surface font-headline italic text-lg tracking-widest hover:bg-surface-container-high transition-colors"
+                disabled={isFinishing}
+                className={`flex-1 py-4 bg-surface-container text-on-surface font-headline italic text-lg tracking-widest transition-colors ${
+                  isFinishing ? 'opacity-60 cursor-wait' : 'hover:bg-surface-container-high'
+                }`}
               >
-                查看报告
+                {isFinishing ? '正在整理证据' : '查看报告'}
               </button>
             </div>
           </div>
@@ -378,7 +429,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
 
   // ==================== 答题页面 ====================
   return (
-    <div className="pt-16 pb-16 px-4 md:px-6 flex flex-col items-center min-h-screen">
+      <div className="pt-16 pb-16 px-4 md:px-6 flex flex-col items-center min-h-screen">
       {/* 顶部 */}
       <div className="w-full max-w-4xl mb-4">
         <button
@@ -398,7 +449,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
         {currentScene && (
           <p className="text-primary font-headline text-sm mb-2">{currentScene.year} · {currentScene.title}</p>
         )}
-        <h2 className="text-3xl md:text-4xl font-headline italic tracking-tighter text-on-surface">场景专属考核</h2>
+        <h2 className="text-[clamp(1.8rem,3.4vw,2.5rem)] font-headline italic tracking-tighter text-on-surface">场景专属考核</h2>
         <p className="text-tertiary font-label text-sm mt-1">紧扣场景事件与高考考点</p>
       </motion.div>
 
@@ -511,7 +562,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
       )}
 
       {/* 操作按钮 */}
-      <div className="w-full max-w-4xl mt-6 flex justify-between items-center">
+      <div className="w-full max-w-4xl mt-6 flex flex-wrap justify-between items-center gap-4">
         <button
           onClick={handlePrev}
           disabled={currentIndex === 0}
@@ -527,7 +578,7 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
           <button
             onClick={handleSubmit}
             disabled={selectedOptions.length === 0}
-            className={`px-8 py-3 font-headline italic text-lg tracking-widest transition-all ${
+            className={`px-6 sm:px-8 py-3 font-headline italic text-base sm:text-lg tracking-widest transition-all ${
               selectedOptions.length > 0
                 ? 'bg-primary text-on-primary hover:bg-primary/90'
                 : 'bg-surface-container text-tertiary/30 cursor-not-allowed'
@@ -538,14 +589,14 @@ export const AssessmentScreen: React.FC<AssessmentScreenProps> = ({ sceneId: pro
         ) : (
           <button
             onClick={handleNext}
-            className="flex items-center gap-2 px-8 py-3 bg-primary text-on-primary font-headline italic text-lg tracking-widest hover:bg-primary/90 transition-colors"
+            className="flex items-center gap-2 px-6 sm:px-8 py-3 bg-primary text-on-primary font-headline italic text-base sm:text-lg tracking-widest hover:bg-primary/90 transition-colors"
           >
             {currentIndex < questions.length - 1 ? '下一题' : '查看结果'}
             <ArrowRight className="w-4 h-4" />
           </button>
         )}
 
-        <div className="w-20"></div>
+        <div className="hidden sm:block w-20"></div>
       </div>
     </div>
   );

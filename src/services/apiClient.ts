@@ -1,4 +1,25 @@
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
+
+async function readJsonResponse(res: Response) {
+  const text = await res.text();
+
+  if (!text.trim()) {
+    throw new Error(`接口返回了空响应：${res.status} ${res.statusText}`);
+  }
+
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`接口返回的不是合法 JSON：${text.slice(0, 200)}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(data.error || `请求失败：${res.status} ${res.statusText}`);
+  }
+
+  return data;
+}
 
 function getHeaders() {
   const token = localStorage.getItem('token');
@@ -14,9 +35,7 @@ export async function loginUser(email: string, password: string) {
     headers: getHeaders(),
     body: JSON.stringify({ email, password }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  return data;
+  return readJsonResponse(res);
 }
 
 export async function registerUser(email: string, password: string, name: string) {
@@ -25,19 +44,16 @@ export async function registerUser(email: string, password: string, name: string
     headers: getHeaders(),
     body: JSON.stringify({ email, password, name }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  return data;
+  return readJsonResponse(res);
 }
 
-export async function chatWithNpc(npcId: string, sceneId: string, history: any[], message: string) {
+export async function chatWithNpc(npcId: string, sceneId: string, history: any[], message: string, userName?: string) {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: getHeaders(),
-    body: JSON.stringify({ npcId, sceneId, history, message }),
+    body: JSON.stringify({ npcId, sceneId, history, message, userName }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
+  const data = await readJsonResponse(res);
   return data.text;
 }
 
@@ -47,8 +63,7 @@ export async function generateQuiz(sceneId: string) {
     headers: getHeaders(),
     body: JSON.stringify({ sceneId }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
+  const data = await readJsonResponse(res);
   return data.questions;
 }
 
@@ -58,9 +73,7 @@ export async function submitLog(sceneId: string, text: string) {
     headers: getHeaders(),
     body: JSON.stringify({ sceneId, text }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  return data;
+  return readJsonResponse(res);
 }
 
 export async function generateReport() {
@@ -68,9 +81,15 @@ export async function generateReport() {
     method: 'POST',
     headers: getHeaders(),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  return data;
+  return readJsonResponse(res);
+}
+
+export async function getLearningLogs() {
+  const res = await fetch(`${API_BASE}/logs`, {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+  return readJsonResponse(res);
 }
 
 export async function sendEmailReport(email: string, reportData: any) {
@@ -79,9 +98,7 @@ export async function sendEmailReport(email: string, reportData: any) {
     headers: getHeaders(),
     body: JSON.stringify({ email, reportData }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  return data;
+  return readJsonResponse(res);
 }
 
 export async function sendDingTalkReport(reportData: any) {
@@ -90,9 +107,7 @@ export async function sendDingTalkReport(reportData: any) {
     headers: getHeaders(),
     body: JSON.stringify({ reportData }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  return data;
+  return readJsonResponse(res);
 }
 
 // ==================== 场景剧情 API ====================
@@ -102,8 +117,7 @@ export async function getStoryScript(sceneId: string) {
     method: 'GET',
     headers: getHeaders(),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
+  const data = await readJsonResponse(res);
   return data.script;
 }
 
@@ -113,9 +127,7 @@ export async function startStory(sceneId: string) {
     headers: getHeaders(),
     body: JSON.stringify({ sceneId }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  return data;
+  return readJsonResponse(res);
 }
 
 export async function chooseInStory(
@@ -130,9 +142,7 @@ export async function chooseInStory(
     headers: getHeaders(),
     body: JSON.stringify({ sceneId, nodeId, choiceId, previousChoices, personalityAccumulator }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  return data;
+  return readJsonResponse(res);
 }
 
 export async function continueStory(sceneId: string, nodeId: string, previousChoices: string[]) {
@@ -141,7 +151,5 @@ export async function continueStory(sceneId: string, nodeId: string, previousCho
     headers: getHeaders(),
     body: JSON.stringify({ sceneId, nodeId, previousChoices }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  return data;
+  return readJsonResponse(res);
 }

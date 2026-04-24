@@ -98,6 +98,7 @@ export interface UserProfile {
 
 export interface AppState {
   learnedNodes: string[];
+  assessedScenes: string[];
   incorrectQuestions: string[];
   interactedNpcs: string[];
   userProfile: UserProfile;

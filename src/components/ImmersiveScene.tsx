@@ -19,10 +19,10 @@ const ImmersiveScene: React.FC<ImmersiveSceneProps> = ({ node, onBack, onEnterSc
     // 短暂延迟以显示加载效果
     await new Promise(resolve => setTimeout(resolve, 500));
     setPhase('story');
-    onEnterScene();
   };
 
   const handleStoryComplete = () => {
+    onEnterScene();
     setPhase('ending');
   };
 

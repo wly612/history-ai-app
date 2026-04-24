@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Map, Theater, FileText, BarChart3, Shield, Settings, X, Camera, User as UserIcon } from 'lucide-react';
 import { Screen, AppState } from '../types';
@@ -10,13 +10,25 @@ interface LayoutProps {
   hideNav?: boolean;
   appState?: AppState;
   onUpdateProfile?: (profile: { name: string; avatar: string; registrationId: number }) => void;
+  onLogout?: () => void;
 }
 
-export default function Layout({ children, currentScreen, onScreenChange, hideNav, appState, onUpdateProfile }: LayoutProps) {
+export default function Layout({ children, currentScreen, onScreenChange, hideNav, appState, onUpdateProfile, onLogout }: LayoutProps) {
   const [showSettings, setShowSettings] = useState(false);
+  const [isChromeHidden, setIsChromeHidden] = useState(false);
   const [tempName, setTempName] = useState(appState?.userProfile.name || '');
   const [tempAvatar, setTempAvatar] = useState(appState?.userProfile.avatar || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsChromeHidden(window.scrollY > 120);
+    };
+
+    handleScroll();
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   const handleSaveProfile = () => {
     if (onUpdateProfile && appState) {
@@ -46,20 +58,30 @@ export default function Layout({ children, currentScreen, onScreenChange, hideNa
       
       {/* Top Navigation */}
       {!hideNav && (
-        <header className="fixed top-0 w-full z-50 flex justify-between items-center px-8 py-6 bg-transparent shadow-[0_0_64px_rgba(0,0,0,0.8)] backdrop-blur-sm md:backdrop-blur-none">
-          <div className="text-2xl font-bold text-primary-container drop-shadow-[0_2px_10px_rgba(139,0,0,0.4)] font-headline tracking-tight uppercase">
-            档案 1937-1949
+        <header className={`fixed top-0 w-full z-50 flex flex-wrap justify-between items-start gap-3 px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6 bg-transparent shadow-[0_0_64px_rgba(0,0,0,0.8)] backdrop-blur-sm md:backdrop-blur-none transition-all duration-500 ${
+          isChromeHidden ? '-translate-y-full opacity-0 pointer-events-none' : 'translate-y-0 opacity-100'
+        }`}>
+          <div className="flex flex-col leading-[0.95] lg:hidden">
+            <span className="text-[1.7rem] sm:text-[1.95rem] font-bold text-primary-container drop-shadow-[0_2px_10px_rgba(139,0,0,0.4)] font-headline tracking-[0.04em]">
+              历史档案馆
+            </span>
+            <span className="mt-2 text-[0.95rem] sm:text-[1.1rem] text-primary/85 font-headline tracking-[0.16em] pl-[0.08em]">
+              档案 1937-1949
+            </span>
+            <div className="mt-3 text-[10px] uppercase tracking-[0.28em] text-tertiary/40 font-label">
+              机密访问限制
+            </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="ml-auto flex items-center gap-2 sm:gap-3 lg:gap-4 max-w-full">
             {appState && (
-              <div className="flex items-center gap-3 px-4 py-2 bg-surface-container-high border border-white/5 rounded-full">
+              <div className="flex items-center gap-2 sm:gap-3 px-3 py-2 sm:px-4 bg-surface-container-high border border-white/5 rounded-full max-w-[9.5rem] sm:max-w-[12rem] md:max-w-[14rem]">
                 <img 
                   src={appState.userProfile.avatar} 
                   alt={appState.userProfile.name} 
                   className="w-8 h-8 rounded-full object-cover border border-primary/20"
                   referrerPolicy="no-referrer"
                 />
-                <span className="text-sm font-label italic text-tertiary hidden sm:inline">{appState.userProfile.name}</span>
+                <span className="text-sm font-label italic text-tertiary truncate hidden sm:inline">{appState.userProfile.name}</span>
               </div>
             )}
             <button 
@@ -68,7 +90,7 @@ export default function Layout({ children, currentScreen, onScreenChange, hideNa
                 setTempAvatar(appState?.userProfile.avatar || '');
                 setShowSettings(true);
               }}
-              className="p-2 text-tertiary hover:text-primary transition-colors bg-surface-container-high border border-white/5 rounded-full"
+              className="shrink-0 p-2 text-tertiary hover:text-primary transition-colors bg-surface-container-high border border-white/5 rounded-full"
             >
               <Settings className="w-6 h-6" />
             </button>
@@ -81,15 +103,18 @@ export default function Layout({ children, currentScreen, onScreenChange, hideNa
         {showSettings && (
           <motion.div 
             initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
+            animate={{ opacity: isChromeHidden ? 0 : 1, y: isChromeHidden ? -24 : 0 }}
             exit={{ opacity: 0 }}
+            onAnimationComplete={() => {
+              if (isChromeHidden) setShowSettings(false);
+            }}
             className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-background/80 backdrop-blur-md"
           >
             <motion.div 
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.9, y: 20 }}
-              className="bg-surface-container-high max-w-md w-full p-8 border border-white/5 shadow-2xl relative"
+            className="bg-surface-container-high max-w-md w-full p-6 sm:p-8 border border-white/5 shadow-2xl relative"
             >
               <button 
                 onClick={() => setShowSettings(false)}
@@ -136,18 +161,29 @@ export default function Layout({ children, currentScreen, onScreenChange, hideNa
                   </div>
                 </div>
 
-                <div className="pt-4 flex gap-4">
+                <div className="pt-4 space-y-4">
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={() => setShowSettings(false)}
+                      className="flex-1 py-3 border border-white/10 text-tertiary font-headline italic tracking-widest hover:bg-white/5 transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button 
+                      onClick={handleSaveProfile}
+                      className="flex-1 py-3 bg-primary text-on-primary font-headline italic tracking-widest hover:scale-105 transition-transform"
+                    >
+                      保存更改
+                    </button>
+                  </div>
                   <button 
-                    onClick={() => setShowSettings(false)}
-                    className="flex-1 py-3 border border-white/10 text-tertiary font-headline italic tracking-widest hover:bg-white/5 transition-colors"
+                    onClick={() => {
+                      setShowSettings(false);
+                      onLogout?.();
+                    }}
+                    className="w-full py-3 border border-primary/20 text-primary/85 font-headline italic tracking-widest hover:bg-primary/8 transition-colors"
                   >
-                    取消
-                  </button>
-                  <button 
-                    onClick={handleSaveProfile}
-                    className="flex-1 py-3 bg-primary text-on-primary font-headline italic tracking-widest hover:scale-105 transition-transform"
-                  >
-                    保存更改
+                    断开链接（登出）
                   </button>
                 </div>
               </div>
@@ -160,8 +196,11 @@ export default function Layout({ children, currentScreen, onScreenChange, hideNa
       {!hideNav && (
         <aside className="fixed left-0 top-0 h-full w-72 bg-[#131313]/90 backdrop-blur-xl flex flex-col py-12 z-40 hidden lg:flex shadow-[40px_0_80px_rgba(0,0,0,0.9)]">
           <div className="px-8 mb-16">
-            <div className="text-xl font-black text-primary-container font-headline mb-1">历史档案库</div>
-            <div className="text-[10px] uppercase tracking-[0.3em] text-tertiary/40 font-label">机密访问限制</div>
+            <div className="flex flex-col leading-[0.95]">
+              <div className="text-[1.6rem] font-black text-primary-container font-headline tracking-[0.04em]">历史档案馆</div>
+              <div className="mt-2 text-sm text-primary/80 font-headline tracking-[0.16em]">档案 1937-1949</div>
+            </div>
+            <div className="mt-3 text-[10px] uppercase tracking-[0.3em] text-tertiary/40 font-label">机密访问限制</div>
           </div>
           <div className="flex flex-col gap-4">
             <NavItem 
@@ -199,13 +238,13 @@ export default function Layout({ children, currentScreen, onScreenChange, hideNa
       )}
 
       {/* Main Content */}
-      <main className={`relative min-h-screen ${!hideNav ? 'lg:pl-72' : ''}`}>
+      <main className={`relative min-h-screen overflow-x-hidden ${!hideNav ? 'lg:pl-72' : ''}`}>
         {children}
       </main>
 
       {/* Bottom Navigation (Mobile) */}
       {!hideNav && (
-        <nav className="lg:hidden fixed bottom-0 w-full z-50 flex justify-around items-center px-12 pb-8 h-24 bg-gradient-to-t from-[#131313] via-[#131313]/80 to-transparent">
+        <nav className="lg:hidden fixed bottom-0 w-full z-50 flex justify-around items-center px-6 sm:px-10 pb-6 sm:pb-8 h-22 sm:h-24 bg-gradient-to-t from-[#131313] via-[#131313]/80 to-transparent">
           <MobileNavItem 
             icon={<Map className="w-6 h-6" />} 
             label="地图" 

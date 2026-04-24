@@ -5,7 +5,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 export async function getChatResponse(systemPrompt: string, history: { role: 'user' | 'model', parts: { text: string }[] }[], message: string) {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.5-flash",
       contents: [
         ...history,
         { role: 'user', parts: [{ text: message }] }
@@ -37,7 +37,7 @@ export async function generateSceneDescription(year: string, title: string, iden
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.5-flash",
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
     });
 

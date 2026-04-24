@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { supabase } from './supabaseClient';
+import { explainSupabaseError, supabase } from './supabaseClient';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -59,7 +59,7 @@ router.post('/register', async (req, res) => {
     const token = jwt.sign({ id: data.id, email: data.email }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, user: { id: data.id, name: data.name, email: data.email, registrationId: data.registration_id } });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: explainSupabaseError(err) });
   }
 });
 
@@ -88,7 +88,7 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, user: { id: user.id, name: user.name, email: user.email, registrationId: user.registration_id } });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: explainSupabaseError(err) });
   }
 });
 

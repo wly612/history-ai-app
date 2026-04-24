@@ -21,6 +21,7 @@ export default function App() {
   
   const [appState, setAppState] = useState<AppState>({
     learnedNodes: [],
+    assessedScenes: [],
     incorrectQuestions: [],
     interactedNpcs: [],
     userProfile: {
@@ -29,6 +30,15 @@ export default function App() {
       registrationId: 0
     }
   });
+
+  const getProgressKey = () => {
+    try {
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      return user.id ? `history-ai-progress:${user.id}` : null;
+    } catch {
+      return null;
+    }
+  };
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -42,9 +52,34 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const key = getProgressKey();
+    if (!key) return;
+
+    localStorage.setItem(key, JSON.stringify({
+      learnedNodes: appState.learnedNodes,
+      assessedScenes: appState.assessedScenes || [],
+      incorrectQuestions: appState.incorrectQuestions,
+      interactedNpcs: appState.interactedNpcs,
+      lastAssessmentTime: appState.lastAssessmentTime,
+    }));
+  }, [appState.learnedNodes, appState.assessedScenes, appState.incorrectQuestions, appState.interactedNpcs, appState.lastAssessmentTime, isAuthenticated]);
+
   const handleUpdateProfile = (profile: { name: string; avatar?: string; registrationId?: number; email?: string }) => {
+    const key = getProgressKey();
+    let savedProgress = null;
+    try {
+      savedProgress = key ? JSON.parse(localStorage.getItem(key) || 'null') : null;
+    } catch {}
+
     setAppState(prev => ({
       ...prev,
+      ...(savedProgress || {}),
+      learnedNodes: savedProgress?.learnedNodes || [],
+      assessedScenes: savedProgress?.assessedScenes || [],
+      incorrectQuestions: savedProgress?.incorrectQuestions || [],
+      interactedNpcs: savedProgress?.interactedNpcs || [],
       userProfile: {
         name: profile.name,
         avatar: profile.avatar || 'https://picsum.photos/seed/user/100/100',
@@ -77,19 +112,23 @@ export default function App() {
     }));
   };
 
-  const handleAssessmentComplete = (incorrectIds: string[]) => {
+  const handleAssessmentComplete = (incorrectIds: string[], sceneId?: string) => {
     const now = new Date();
     const formattedTime = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
     
     setAppState(prev => {
+      const assessedScenes = sceneId && !prev.assessedScenes.includes(sceneId)
+        ? [...prev.assessedScenes, sceneId]
+        : prev.assessedScenes;
+
       if (focusQuestionId) {
         const isNowCorrect = incorrectIds.length === 0;
         const newIncorrect = isNowCorrect 
           ? prev.incorrectQuestions.filter(id => id !== focusQuestionId)
           : prev.incorrectQuestions;
-        return { ...prev, incorrectQuestions: newIncorrect, lastAssessmentTime: formattedTime };
+        return { ...prev, assessedScenes, incorrectQuestions: newIncorrect, lastAssessmentTime: formattedTime };
       }
-      return { ...prev, incorrectQuestions: incorrectIds, lastAssessmentTime: formattedTime };
+      return { ...prev, assessedScenes, incorrectQuestions: incorrectIds, lastAssessmentTime: formattedTime };
     });
     setCurrentScreen('report');
     setFocusQuestionId(undefined);
@@ -109,7 +148,9 @@ export default function App() {
 
   const handleScreenChange = (screen: Screen) => {
     setCurrentScreen(screen);
-    setSelectedNode(null); 
+    if (screen === 'chronicle') {
+      setSelectedNode(null);
+    }
     setFocusQuestionId(undefined);
   };
 
@@ -134,12 +175,13 @@ export default function App() {
       case 'chronicle':
         return <ChronicleScreen key="chronicle" onNodeSelect={handleNodeSelect} appState={appState} />;
       case 'dialogue':
-        return <DialogueScreen key="dialogue" sceneId={selectedNode ? selectedNode.id : undefined} onNpcInteract={handleNpcInteract} onNpcSelect={setIsNpcActive} />;
+        return <DialogueScreen key="dialogue" sceneId={selectedNode ? selectedNode.id : undefined} userName={appState.userProfile.name} onNpcInteract={handleNpcInteract} onNpcSelect={setIsNpcActive} />;
       case 'assessment':
         return (
           <AssessmentScreen 
             key="assessment" 
             sceneId={selectedNode ? selectedNode.id : undefined}
+            appState={appState}
             onComplete={handleAssessmentComplete} 
             focusQuestionId={focusQuestionId}
             onBack={focusQuestionId ? () => setCurrentScreen('report') : undefined}
@@ -166,10 +208,8 @@ export default function App() {
       hideNav={!!selectedNode || isNpcActive}
       appState={appState}
       onUpdateProfile={handleUpdateProfile}
+      onLogout={handleLogout}
     >
-      <div className="absolute top-4 right-4 z-[100] cursor-pointer" onClick={handleLogout}>
-         <span className="text-xs text-tertiary hover:text-primary transition-colors font-label tracking-widest uppercase">断开链接 (登出)</span>
-      </div>
       <AnimatePresence mode="wait">
         <motion.div
           key={selectedNode ? `immersive-${selectedNode.id}` : currentScreen}

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { PersonStanding, History, CheckSquare, MessageSquare, ArrowRight, X as CloseIcon, User, MapPin, CheckCircle2, Circle, ShieldAlert, Loader2, Send } from 'lucide-react';
+import { PersonStanding, History, CheckSquare, MessageSquare, ArrowRight, X as CloseIcon, User, CheckCircle2, Circle, ShieldAlert, Loader2, Send, ScrollText, Download } from 'lucide-react';
 import { AppState, Screen, HISTORICAL_NODES, QUESTIONS } from '../types';
-import { generateReport, sendDingTalkReport } from '../services/apiClient';
+import { generateReport, getLearningLogs, sendDingTalkReport } from '../services/apiClient';
 
 interface ReportScreenProps {
   appState: AppState;
@@ -16,31 +16,81 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   
   const [stats, setStats] = useState({ strategy: 50, precision: 50, pragmatism: 50, peoplesView: 50, empathy: 50 });
+  const [archetype, setArchetype] = useState('未定型历史人格');
   const [aiComments, setAiComments] = useState("正在生成评价...");
+  const [mentorAnalysis, setMentorAnalysis] = useState("正在生成深度分析...");
+  const [logCount, setLogCount] = useState(0);
+  const [recentLogs, setRecentLogs] = useState<{ index: number; text: string }[]>([]);
+  const [analysisSource, setAnalysisSource] = useState('');
+  const [analysisWarning, setAnalysisWarning] = useState('');
+  const [reportError, setReportError] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    function getReportCacheKey() {
+      try {
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        return `history-ai-report:${user.id || appState.userProfile.registrationId || appState.userProfile.name}`;
+      } catch {
+        return `history-ai-report:${appState.userProfile.registrationId || appState.userProfile.name}`;
+      }
+    }
+
+    function buildLogSignature(logData: any) {
+      const logs = Array.isArray(logData?.logs) ? logData.logs : [];
+      const latest = logs[0];
+      return [logData?.count || logs.length || 0, latest?.id || '', latest?.created_at || ''].join(':');
+    }
+
+    function applyReportData(data: any) {
+      setStats({
+        strategy: data.strategic || 50,
+        empathy: data.empathy || 50,
+        peoplesView: data.people_oriented || 50,
+        pragmatism: data.pragmatic || 50,
+        // We don't have meticulousness in radar directly mapping, we map precision to meticulousness
+        precision: data.meticulousness || 50
+      });
+      if (data.archetype) setArchetype(data.archetype);
+      if (data.ai_comments) setAiComments(data.ai_comments);
+      if (data.mentor_analysis) setMentorAnalysis(data.mentor_analysis);
+      setLogCount(data.log_count || 0);
+      setRecentLogs(Array.isArray(data.recent_logs) ? data.recent_logs : []);
+      setAnalysisSource(data.analysis_source || '');
+      setAnalysisWarning(data.analysis_warning || '');
+    }
+
     async function loadReport() {
       try {
+        setReportError('');
+        const cacheKey = getReportCacheKey();
+        const logData = await getLearningLogs();
+        const signature = buildLogSignature(logData);
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+
+        if (cached?.signature === signature && cached?.report) {
+          applyReportData({
+            ...cached.report,
+            analysis_warning: cached.report.analysis_warning || '学习记录未变化，已复用上一次画像结果。',
+          });
+          return;
+        }
+
         const data = await generateReport();
-        setStats({
-          strategy: data.strategic || 50,
-          empathy: data.empathy || 50,
-          peoplesView: data.people_oriented || 50,
-          pragmatism: data.pragmatic || 50,
-          // We don't have meticulousness in radar directly mapping, we map precision to meticulousness
-          precision: data.meticulousness || 50
-        });
-        if (data.ai_comments) setAiComments(data.ai_comments);
+        applyReportData(data);
+        localStorage.setItem(cacheKey, JSON.stringify({ signature, report: data }));
       } catch (e) {
         console.error(e);
+        setReportError(e instanceof Error ? e.message : '未知错误');
+        setAiComments('报告接口暂时无法读取分析结果，请检查后端服务和 Supabase 配置。');
+        setMentorAnalysis(e instanceof Error ? e.message : '未知错误');
       } finally {
         setIsLoading(false);
       }
     }
     loadReport();
-  }, []);
+  }, [appState.userProfile.name, appState.userProfile.registrationId]);
 
   const getTags = () => {
     const tags = [];
@@ -114,7 +164,7 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
   }
 
   return (
-    <div className="min-h-screen pt-28 pb-32 px-6 md:px-12 relative">
+    <div className="min-h-screen pt-24 sm:pt-28 pb-28 sm:pb-32 px-4 sm:px-6 md:px-10 xl:px-12 relative">
       {/* Background Vignette */}
       <div className="fixed inset-0 vignette z-[-1]"></div>
 
@@ -125,7 +175,7 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 50 }}
-            className={`fixed bottom-10 left-1/2 -translate-x-1/2 z-[200] px-8 py-4 flex items-center gap-3 border shadow-2xl backdrop-blur-md ${
+            className={`fixed bottom-6 sm:bottom-10 left-1/2 -translate-x-1/2 z-[200] w-[calc(100%-2rem)] max-w-max px-5 sm:px-8 py-4 flex items-center gap-3 border shadow-2xl backdrop-blur-md ${
               toast.type === 'success' ? 'bg-green-900/80 border-green-500/50 text-white' : 'bg-red-900/80 border-red-500/50 text-white'
             }`}
           >
@@ -144,12 +194,12 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
                 <User className="w-16 h-16 text-primary/40" />
               </div>
               <div className="flex-1">
-                <h2 className="text-4xl font-headline italic text-primary mb-2">{appState.userProfile.name}</h2>
+                <h2 className="text-[clamp(1.9rem,3.4vw,2.5rem)] font-headline italic text-primary mb-2 break-words">{appState.userProfile.name}</h2>
                 <p className="text-tertiary/60 font-label uppercase tracking-widest text-xs mb-6">档案编号：SH-1937-{appState.userProfile.registrationId.toString().padStart(4, '0')}</p>
                 <div className="space-y-4 text-on-surface-variant font-body leading-relaxed">
-                  <p>林书文，1915年生于上海。曾就读于圣约翰大学，主修历史与政治学。1937年抗战爆发后，毅然投身时代洪流。</p>
-                  <p>在多次历史模拟情境中，林书文表现出了卓越的战略眼光和深厚的人民情怀。他擅长从纷繁复杂的历史碎片中抽丝剥茧，寻找通往未来的最优路径。</p>
-                  <p>作为“档案 1937-1949”计划的核心观察对象，他的每一次抉择都为我们理解那个波澜壮阔的时代提供了独特的视角。</p>
+                  <p>{appState.userProfile.name} 已被纳入“档案 1937-1949”计划观察序列，系统将结合你的历史对话、场景选择与答题表现持续构建画像。</p>
+                  <p>当前档案会重点记录你在战略判断、人民立场、共情能力、缜密程度与务实倾向上的行为线索，并随着互动数据增加逐步修正结论。</p>
+                  <p>每完成一次情景体验、人物对话或场景考核，这份卷宗都会继续补充新的证据，用于生成更准确的导师评语与人格分析。</p>
                 </div>
               </div>
             </div>
@@ -266,16 +316,16 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="relative mb-12 border-b border-white/5 pb-8 flex flex-col md:flex-row justify-between items-end gap-6"
+        className="relative mb-10 sm:mb-12 border-b border-white/5 pb-8 flex flex-col md:flex-row justify-between md:items-end gap-6"
       >
         <div>
-          <h1 className="text-5xl md:text-7xl font-headline font-bold text-on-surface mb-4 tracking-tighter">
+          <h1 className="text-[clamp(2.2rem,5vw,4.8rem)] font-headline font-bold text-on-surface mb-4 tracking-tighter break-words">
             学情档案：<span 
               className="text-primary cursor-pointer hover:underline decoration-primary/30 underline-offset-8 transition-all"
               onClick={() => setShowProfile(true)}
             >{appState.userProfile.name}</span>
           </h1>
-          <p className="text-tertiary opacity-60 font-headline italic text-xl">情报卷宗：学号 #{appState.userProfile.registrationId.toString().padStart(4, '0')}</p>
+          <p className="text-tertiary opacity-60 font-headline italic text-[clamp(1rem,2vw,1.25rem)]">情报卷宗：学号 #{appState.userProfile.registrationId.toString().padStart(4, '0')}</p>
         </div>
         <div className="relative rotate-3">
           <div className="border-2 border-primary-container px-6 py-2 text-primary-container font-bold text-lg tracking-widest uppercase font-headline">
@@ -285,21 +335,21 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
         </div>
       </motion.div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 xl:gap-10 items-stretch">
         {/* Left Panel: Personality Profile */}
-        <div className="lg:col-span-5 flex flex-col gap-8">
+        <div className="xl:col-span-5 flex flex-col">
           <motion.section 
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: 0.2 }}
-            className="bg-surface-container-high p-8 relative overflow-hidden"
+            className="bg-surface-container-high p-8 relative overflow-hidden h-full"
           >
             <h3 className="text-on-surface-variant font-headline text-2xl mb-8 flex items-center gap-3">
               <PersonStanding className="w-6 h-6" /> 历史人格画像
             </h3>
             
             {/* Radar Chart SVG */}
-            <div className="relative h-72 flex justify-center items-center mb-8">
+            <div className="relative h-64 sm:h-72 flex justify-center items-center mb-8">
               <svg className="w-full h-full max-w-[260px]" viewBox="0 0 100 100">
                 {/* Grids */}
                 <polygon points="50,10 90,40 75,85 25,85 10,40" className="stroke-tertiary/10 fill-none stroke-[0.5]" />
@@ -333,6 +383,9 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
               <div className="text-on-surface-variant font-headline italic text-base mb-3">
                 判定结果为：
               </div>
+              <div className="mb-4 inline-flex items-center border border-primary/20 bg-primary/8 px-4 py-2 text-sm text-primary font-headline italic tracking-wide">
+                {archetype}
+              </div>
               <div className="flex flex-wrap gap-2">
                 {dynamicTags.map((tag, idx) => (
                   <Tag key={idx} text={tag.text} active={tag.active} />
@@ -340,24 +393,11 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
               </div>
             </div>
           </motion.section>
-
-          {/* AI Comment */}
-          <motion.section 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.4 }}
-            className="bg-tertiary-container/10 p-8 border-l-4 border-primary-container"
-          >
-            <h3 className="text-primary font-headline text-xl mb-4 italic">历史导师评语 / 导师分析</h3>
-            <div className="text-tertiary text-lg leading-relaxed font-body">
-              {aiComments}
-            </div>
-          </motion.section>
         </div>
 
         {/* Right Panel: Stats & Viz */}
-        <div className="lg:col-span-7 flex flex-col gap-8">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="xl:col-span-7 h-full">
+          <div className="grid grid-cols-1 md:grid-cols-2 md:grid-rows-2 gap-6 h-full">
             <StatCard 
               icon={<History className="w-8 h-8 text-primary" />} 
               value={`${learnedCount} / ${totalNodes}`} 
@@ -387,7 +427,7 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: 0.6 }}
               onClick={() => setActiveModal('artifact')}
-              className="bg-surface-container-highest relative overflow-hidden h-full min-h-[200px] cursor-pointer group"
+              className="bg-surface-container-highest relative overflow-hidden h-full min-h-[17rem] cursor-pointer group"
             >
               <img 
                 className="absolute inset-0 w-full h-full object-cover grayscale opacity-40 mix-blend-overlay group-hover:scale-110 transition-transform duration-700" 
@@ -403,32 +443,99 @@ export const ReportScreen: React.FC<ReportScreenProps> = ({ appState, onNavigate
             </motion.div>
           </div>
 
-          {/* CTA Section */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.8 }}
-            className="mt-auto pt-8"
-          >
-            <button
-              onClick={handleSendToDingTalk}
-              disabled={isSending}
-              className="w-full group relative bg-primary text-on-primary px-10 py-6 flex items-center justify-between transition-all hover:bg-primary/90 disabled:opacity-50"
-            >
-              <div className="flex items-center gap-4">
-                {isSending ? <Loader2 className="w-8 h-8 animate-spin" /> : <Send className="w-8 h-8" />}
-                <span className="text-xl font-headline font-bold tracking-widest uppercase">
-                  {isSending ? '发送中...' : '发送报告到钉钉群'}
-                </span>
-              </div>
-              <ArrowRight className="w-6 h-6 transition-transform group-hover:translate-x-2" />
-            </button>
-            <p className="mt-4 text-center text-[10px] text-tertiary/30 uppercase tracking-[0.5em] font-label">
-              最终档案传输协议 4.1.0
-            </p>
-          </motion.div>
         </div>
       </div>
+
+      {/* AI Comment */}
+      <motion.section 
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.4 }}
+        className="mt-8 bg-tertiary-container/10 p-6 sm:p-8 border-l-4 border-primary-container"
+      >
+        <h3 className="text-primary font-headline text-xl mb-6 italic">历史导师评语 / 导师分析</h3>
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.35fr)] gap-8">
+          <div>
+            <div className="text-xs font-label uppercase tracking-[0.3em] text-primary/70 mb-2">导师评语</div>
+            <div className="text-tertiary text-lg leading-relaxed font-body">
+              {aiComments}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs font-label uppercase tracking-[0.3em] text-primary/70 mb-2">深度分析</div>
+            <div className="text-tertiary/80 text-base leading-relaxed font-body whitespace-pre-line">
+              {mentorAnalysis}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-8 bg-surface-container-highest/50 border border-primary/10 p-4">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div className="flex items-center gap-2 text-primary font-label text-xs uppercase tracking-[0.2em]">
+              <ScrollText className="w-4 h-4" />
+              分析证据日志
+            </div>
+            <div className="text-tertiary/70 font-label text-xs">
+              {logCount} 条
+              {analysisSource ? ` / ${analysisSource}` : ''}
+            </div>
+          </div>
+          {reportError && (
+            <p className="mb-3 text-xs text-red-300 font-body leading-relaxed">
+              接口读取失败：{reportError}
+            </p>
+          )}
+          {!reportError && analysisWarning && (
+            <p className="mb-3 text-xs text-primary/80 font-body leading-relaxed">
+              {analysisWarning}
+            </p>
+          )}
+          {reportError ? (
+            <p className="text-xs text-tertiary/60 font-body leading-relaxed">
+              本次报告没有完成日志读取，因此这里不能判断 learning_logs 中是否有记录。请先修复 Supabase API key 后刷新报告。
+            </p>
+          ) : recentLogs.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+              {recentLogs.map(log => (
+                <div key={log.index} className="text-xs text-tertiary/80 font-body leading-relaxed border-l border-primary/20 pl-3">
+                  <span className="text-primary/70 font-label mr-2">#{log.index}</span>
+                  {log.text}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-tertiary/60 font-body leading-relaxed">
+              当前报告接口没有读取到 learning_logs 记录。日志保存在 Supabase 数据库的 learning_logs 表中，不在本地项目文件里。
+            </p>
+          )}
+        </div>
+
+        <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <button
+            onClick={handleSendToDingTalk}
+            disabled={isSending}
+            className="min-h-20 group relative bg-primary text-on-primary px-6 sm:px-8 py-5 flex items-center justify-between transition-all hover:bg-primary/90 disabled:opacity-50"
+          >
+            <div className="flex items-center gap-4 min-w-0">
+              {isSending ? <Loader2 className="w-7 h-7 animate-spin shrink-0" /> : <Send className="w-7 h-7 shrink-0" />}
+              <span className="text-lg sm:text-xl font-headline font-bold tracking-widest uppercase truncate">
+                {isSending ? '发送中...' : '发送报告到钉钉群'}
+              </span>
+            </div>
+            <ArrowRight className="w-6 h-6 shrink-0 transition-transform group-hover:translate-x-2" />
+          </button>
+          <button
+            type="button"
+            className="min-h-20 border border-primary/30 bg-surface-container-highest/70 px-6 py-5 text-primary font-headline italic tracking-widest flex items-center justify-center gap-3 hover:bg-primary/10 transition-colors"
+          >
+            <Download className="w-6 h-6" />
+            下载报告
+          </button>
+        </div>
+        <p className="mt-4 text-center text-[10px] text-tertiary/30 uppercase tracking-[0.5em] font-label">
+          最终档案传输协议 4.1.0
+        </p>
+      </motion.section>
     </div>
   );
 }
@@ -445,7 +552,7 @@ function Modal({ children, title, onClose }: { children: React.ReactNode, title?
         initial={{ scale: 0.9, y: 20 }}
         animate={{ scale: 1, y: 0 }}
         exit={{ scale: 0.9, y: 20 }}
-        className="bg-surface-container-high max-w-2xl w-full p-8 md:p-12 relative border border-white/5 shadow-2xl"
+        className="bg-surface-container-high max-w-2xl w-full p-5 sm:p-8 md:p-12 relative border border-white/5 shadow-2xl"
       >
         <button 
           onClick={onClose}
@@ -454,7 +561,7 @@ function Modal({ children, title, onClose }: { children: React.ReactNode, title?
           <CloseIcon className="w-6 h-6" />
         </button>
         
-        {title && <h2 className="text-3xl font-headline italic text-primary mb-8">{title}</h2>}
+        {title && <h2 className="text-[clamp(1.7rem,3vw,2.2rem)] font-headline italic text-primary mb-6 sm:mb-8 pr-10">{title}</h2>}
         
         {children}
         
@@ -486,13 +593,13 @@ function StatCard({ icon, value, label, progress, segments, activeSegments, subt
     <motion.div 
       whileHover={{ y: -5 }}
       onClick={onClick}
-      className="bg-surface-container-highest p-6 relative group transition-all duration-500 hover:bg-surface-bright cursor-pointer"
+      className="bg-surface-container-highest p-6 relative group transition-all duration-500 hover:bg-surface-bright cursor-pointer h-full min-h-[17rem] flex flex-col"
     >
       <div className="flex justify-between items-start mb-8">
         {icon}
         <span className="text-tertiary/30 font-label text-xs tracking-[0.3em]">DATA</span>
       </div>
-      <div className="text-5xl font-headline font-bold text-on-surface mb-1">{value}</div>
+      <div className="text-[clamp(2rem,4vw,3.1rem)] font-headline font-bold text-on-surface mb-1 break-words">{value}</div>
       <div className="text-sm text-on-surface-variant font-label uppercase tracking-widest">{label}</div>
       
       {progress !== undefined && (

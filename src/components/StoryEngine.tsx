@@ -18,6 +18,7 @@ const StoryEngine: React.FC<StoryEngineProps> = ({ sceneId, onComplete, onBack }
   const [consequence, setConsequence] = useState<string>('');
   const [endingSummary, setEndingSummary] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     loadInitialNode();
@@ -26,11 +27,13 @@ const StoryEngine: React.FC<StoryEngineProps> = ({ sceneId, onComplete, onBack }
   const loadInitialNode = async () => {
     try {
       setIsLoading(true);
+      setErrorMessage('');
       const result = await startStory(sceneId);
       setCurrentNode(result.node);
       setProgress(result.progress);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to start story:', err);
+      setErrorMessage(err?.message || '无法连接剧情服务');
     } finally {
       setIsLoading(false);
     }
@@ -111,6 +114,11 @@ const StoryEngine: React.FC<StoryEngineProps> = ({ sceneId, onComplete, onBack }
     return (
       <div className="min-h-screen flex flex-col items-center justify-center">
         <p className="text-red-500 font-headline">剧情加载失败</p>
+        {errorMessage && (
+          <p className="mt-3 max-w-md px-6 text-center text-sm text-tertiary/70 font-body">
+            {errorMessage}
+          </p>
+        )}
         <button onClick={loadInitialNode} className="mt-4 text-primary underline">
           重试
         </button>

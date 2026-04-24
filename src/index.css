@@ -38,8 +38,23 @@
 }
 
 @layer base {
+  html {
+    font-size: clamp(14px, 0.35vw + 12.5px, 16px);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
   body {
     @apply bg-surface text-on-surface font-body selection:bg-primary-container selection:text-primary;
+  }
+
+  #root {
+    min-height: 100vh;
+    overflow-x: clip;
+  }
+
+  * {
+    min-width: 0;
   }
 }
 
