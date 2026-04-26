@@ -1,16 +1,18 @@
-import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
 // We can import types from the frontend
 import { NPCS, HISTORICAL_NODES } from '../src/types';
-import { searchSimilarChunks, buildRAGPrompt } from './ragService';
+import { searchSimilarChunks } from './ragService';
 
 // 优先加载 .env.local
 dotenv.config({ path: '.env.local' });
 dotenv.config();
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-console.log('GEMINI_API_KEY loaded:', GEMINI_API_KEY ? 'Yes' : 'No');
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || process.env.AGENT_API_KEY;
+const DEEPSEEK_BASE_URL = (process.env.DEEPSEEK_BASE_URL || process.env.AGENT_BASE_URL || 'https://api.deepseek.com').replace(/\/$/, '');
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || process.env.AGENT_MODEL || 'deepseek-chat';
+const DEEPSEEK_FALLBACK_MODEL = process.env.DEEPSEEK_FALLBACK_MODEL || process.env.AGENT_FALLBACK_MODEL || 'deepseek-reasoner';
+console.log('DEEPSEEK_API_KEY loaded:', DEEPSEEK_API_KEY ? 'Yes' : 'No');
 
 // 配置全局代理（让所有 fetch 请求都走代理）
 const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
@@ -19,7 +21,101 @@ if (PROXY_URL) {
   setGlobalDispatcher(new ProxyAgent(PROXY_URL));
 }
 
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY || '' });
+const RETRYABLE_STATUS = new Set([429, 500, 503]);
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+type DeepSeekMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+};
+
+function convertHistoryToDeepSeekMessages(history: any[] = []): DeepSeekMessage[] {
+  return history.map(item => ({
+    role: (item.role === 'model' ? 'assistant' : 'user') as DeepSeekMessage['role'],
+    content: item.parts?.map((part: any) => part.text).filter(Boolean).join('\n') || ''
+  })).filter(message => message.content);
+}
+
+function extractJsonText(text: string) {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  return (fenced?.[1] || trimmed).trim();
+}
+
+async function generateWithRetry(
+  request: {
+    contents: any[];
+    config?: {
+      systemInstruction?: string;
+      responseMimeType?: string;
+    };
+  },
+  models: string[] = [DEEPSEEK_MODEL, DEEPSEEK_FALLBACK_MODEL]
+) {
+  let lastError: any;
+  const apiKey = DEEPSEEK_API_KEY;
+
+  if (!apiKey) {
+    throw new Error('Missing DEEPSEEK_API_KEY or AGENT_API_KEY');
+  }
+
+  const messages: DeepSeekMessage[] = [];
+  if (request.config?.systemInstruction) {
+    messages.push({ role: 'system', content: request.config.systemInstruction });
+  }
+  messages.push(...convertHistoryToDeepSeekMessages(request.contents));
+
+  for (const model of [...new Set(models.filter(Boolean))]) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const payload: any = {
+          model,
+          messages,
+          temperature: 0.7,
+        };
+
+        if (request.config?.responseMimeType === 'application/json') {
+          payload.temperature = 0.2;
+        }
+
+        const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const detail = await response.text();
+          const error: any = new Error(`DeepSeek API error ${response.status}: ${detail}`);
+          error.status = response.status;
+          throw error;
+        }
+
+        const data: any = await response.json();
+        return {
+          text: data.choices?.[0]?.message?.content || ''
+        };
+      } catch (err: any) {
+        lastError = err;
+        const status = err?.status;
+        const isRetryable = RETRYABLE_STATUS.has(status);
+        const isLastAttempt = attempt === 2;
+
+        if (!isRetryable || isLastAttempt) {
+          break;
+        }
+
+        await sleep(800 * (attempt + 1));
+      }
+    }
+  }
+
+  throw lastError;
+}
 
 // RAG 配置
 const RAG_ENABLED = process.env.RAG_ENABLED === 'true';
@@ -31,13 +127,14 @@ export async function chatWithHistoricalFigure(
   sceneId: string, 
   history: any[], 
   message: string,
-  options: { useRAG?: boolean } = {}
+  options: { useRAG?: boolean; userName?: string } = {}
 ) {
   const npc = NPCS.find((n) => n.id === npcId);
   if (!npc) throw new Error("NPC not found");
 
   const node = HISTORICAL_NODES.find(n => n.id === sceneId);
-  const context = node ? `当前历史场景：${node.year}年 ${node.title}（${node.description}）。用户扮演的角色是：${node.identity}。玩家正向你提问。` : '';
+  const learnerName = options.userName?.trim() || '这位馆员';
+  const context = node ? `当前历史场景：${node.year}年 ${node.title}（${node.description}）。用户扮演的角色是：${node.identity}。玩家账号名是：${learnerName}。请在称呼对方时优先使用这个账号名，不要使用任何占位符或系统变量名。玩家正向你提问。` : `玩家账号名是：${learnerName}。请在称呼对方时优先使用这个账号名，不要使用任何占位符或系统变量名。`;
 
   let enhancedMessage = message;
   let retrievedContext = '';
@@ -68,12 +165,11 @@ export async function chatWithHistoricalFigure(
   const systemPrompt = `${npc.systemPrompt}\n${context}\n请基于该时代背景和你的身份，用符合你性格的方式回答问题并给予修正反馈。保持沉浸感。${retrievedContext ? '\n\n你会获得相关的历史资料作为参考，请优先使用资料中的准确信息。' : ''}`;
 
   try {
-    console.log('[AI] 正在调用 Gemini API...');
+    console.log('[AI] 正在调用 DeepSeek API...');
     console.log('[AI] 代理设置 - HTTP_PROXY:', process.env.HTTP_PROXY || '未设置');
     console.log('[AI] 代理设置 - HTTPS_PROXY:', process.env.HTTPS_PROXY || '未设置');
 
-    const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+    const response = await generateWithRetry({
       contents: [
         ...history,
         { role: 'user', parts: [{ text: enhancedMessage }] }
@@ -82,8 +178,11 @@ export async function chatWithHistoricalFigure(
         systemInstruction: systemPrompt,
       },
     });
-    console.log('[AI] API 调用成功');
-    return response.text;
+    console.log('[AI] DeepSeek API 调用成功');
+    return (response.text || '抱歉，我的时空连接受到干扰，请稍后再试。')
+      .replace(/<seg_\d+>/gi, learnerName)
+      .replace(/<user_name>/gi, learnerName)
+      .replace(/\b玩家\b/g, learnerName);
   } catch (err: any) {
     console.error("=== AI Chat Error ===");
     console.error("错误类型:", err.constructor?.name);
@@ -110,8 +209,7 @@ export async function generateSceneDescription(sceneId: string) {
   4. 结尾留有悬念，引导用户开始行动。`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
     return response.text;
@@ -148,15 +246,14 @@ export async function generateDynamicQuiz(sceneId: string, logs: string[]) {
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
         responseMimeType: "application/json",
       }
     });
     
-    let text = response.text || "[]";
+    let text = extractJsonText(response.text || "[]");
     return JSON.parse(text);
   } catch (err) {
     console.error("Generate Quiz Error:", err);
@@ -189,15 +286,14 @@ export async function analyzePersonaLog(logs: string[]) {
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
         responseMimeType: "application/json",
       }
     });
 
-    let text = response.text || "{}";
+    let text = extractJsonText(response.text || "{}");
     return JSON.parse(text);
   } catch (err) {
     console.error("Analyze Persona Error:", err);
@@ -242,8 +338,7 @@ ${aiPromptHint}
 4. 不要输出任何额外的说明或标记`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
     return response.text || "历史的迷雾笼罩了一切...";
@@ -272,8 +367,7 @@ export async function generateChoiceConsequence(
 3. 制造悬念感`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
     return response.text || "你做出了选择...";
@@ -321,8 +415,7 @@ ${choices.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 3. 提供历史启示或学习建议`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const response = await generateWithRetry({
       contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
     return response.text || "历史的审判已经结束...";

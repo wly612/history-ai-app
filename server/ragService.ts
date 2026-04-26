@@ -1,14 +1,12 @@
-import { GoogleGenAI } from '@google/genai';
 import { supabase } from './supabaseClient';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-
 // 文本分块配置
 const CHUNK_SIZE = 512;
 const CHUNK_OVERLAP = 128;
+const EMBEDDING_DIMENSION = 768;
 
 export interface KnowledgeDocument {
   id?: string;
@@ -58,35 +56,33 @@ export function splitTextIntoChunks(text: string, chunkSize: number = CHUNK_SIZE
   return chunks;
 }
 
+function hashToken(token: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < token.length; i++) {
+    hash ^= token.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
 /**
- * 使用 Gemini API 生成文本向量
+ * 使用本地哈希向量生成检索特征。
+ * 比赛要求所有大模型接口统一使用 DeepSeek，因此 RAG 检索不再调用外部 embedding 模型。
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'models/text-embedding-004',
-          content: {
-            parts: [{ text }]
-          }
-        })
-      }
-    );
+  const vector = new Array(EMBEDDING_DIMENSION).fill(0);
+  const tokens = text
+    .toLowerCase()
+    .match(/[\p{Script=Han}]|[a-z0-9]+/gu) || [];
 
-    if (!response.ok) {
-      throw new Error(`Embedding API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.embedding.values;
-  } catch (err) {
-    console.error('Error generating embedding:', err);
-    throw err;
+  for (const token of tokens) {
+    const hash = hashToken(token);
+    const index = hash % EMBEDDING_DIMENSION;
+    vector[index] += (hash & 1) === 0 ? 1 : -1;
   }
+
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
+  return vector.map(value => value / norm);
 }
 
 /**

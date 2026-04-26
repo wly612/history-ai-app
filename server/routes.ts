@@ -1,9 +1,11 @@
 import express from 'express';
-import { chatWithHistoricalFigure, generateSceneDescription, generateDynamicQuiz, analyzePersonaLog, generateStoryNodeContent, generateChoiceConsequence, generateEndingSummary } from './aiService';
-import { supabase } from './supabaseClient';
+import { chatWithHistoricalFigure, generateSceneDescription, generateDynamicQuiz, generateStoryNodeContent, generateChoiceConsequence, generateEndingSummary } from './aiService';
+import { explainSupabaseError, supabase } from './supabaseClient';
 import { sendReportEmail } from './emailService';
 import { sendReportToDingTalk } from './dingtalkService';
+import { analyzePersonaWithAgent } from './personaAgentService';
 import { authenticateToken } from './auth';
+import { NPCS } from '../src/types';
 import {
   createKnowledgeDocument,
   searchSimilarChunks,
@@ -17,10 +19,79 @@ const router = express.Router();
 
 router.use((req: any, res, next) => authenticateToken(req, res, next));
 
+const reportCache = new Map<string, { signature: string; response: any }>();
+
+function buildNoLogProfile() {
+  return {
+    archetype: '未形成画像',
+    strategic: 50,
+    empathy: 50,
+    people_oriented: 50,
+    meticulousness: 50,
+    pragmatic: 50,
+    ai_comments: '数据库中暂未读取到该账号的有效互动日志，因此暂时无法生成个性化导师评语。请确认已登录同一账号，并完成场景选择或人物对话。',
+    mentor_analysis: '报告分析依赖 Supabase 的 learning_logs 表；如果你已经完成互动但这里仍为 0 条，优先检查 /api/log、/api/story/start、/api/story/choose 是否写入成功，以及当前登录 token 对应的 user_id 是否一致。',
+    evidence: [],
+  };
+}
+
+function buildAgentErrorProfile(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return {
+    archetype: 'Agent 分析失败',
+    strategic: 50,
+    empathy: 50,
+    people_oriented: 50,
+    meticulousness: 50,
+    pragmatic: 50,
+    ai_comments: 'Persona agent 未能完成画像分析。报告不会再退回旧版 analyzePersonaLog，请根据下方错误修复 Agent 配置或运行环境。',
+    mentor_analysis: message,
+    evidence: [],
+  };
+}
+
+function buildLogEvidence(logs: string[]) {
+  return logs.slice(-8).map((log, index) => ({
+    index: logs.length - Math.min(logs.length, 8) + index + 1,
+    text: log,
+  }));
+}
+
+function buildReportSignature(rows: any[]) {
+  const latest = rows[rows.length - 1];
+  return [
+    rows.length,
+    latest?.id || '',
+    latest?.created_at || '',
+    latest?.log_text?.length || 0,
+  ].join(':');
+}
+
+async function writeLearningLog(userId: string, sceneId: string, text: string) {
+  const { error } = await supabase.from('learning_logs').insert([{
+    user_id: userId,
+    scene_id: sceneId,
+    log_text: text,
+  }]);
+
+  if (error) {
+    console.error('[LearningLog] 写入失败:', explainSupabaseError(error));
+  }
+}
+
 router.post('/chat', async (req: any, res) => {
-  const { npcId, sceneId, history, message, useRAG } = req.body;
+  const { npcId, sceneId, history, message, useRAG, userName } = req.body;
+  const userId = req.user.id;
+
   try {
-    const text = await chatWithHistoricalFigure(npcId, sceneId, history || [], message, { useRAG });
+    const text = await chatWithHistoricalFigure(npcId, sceneId, history || [], message, { useRAG, userName });
+    const npcName = NPCS.find(npc => npc.id === npcId)?.name || npcId || '历史人物';
+    const learnerName = userName?.trim() || '用户';
+
+    await writeLearningLog(userId, sceneId || 'dialogue', `[人物对话] ${learnerName} 对 ${npcName} 说：${message}`);
+    await writeLearningLog(userId, sceneId || 'dialogue', `[人物回应] ${npcName} 回复 ${learnerName}：${text}`);
+
     res.json({ text });
   } catch (err) {
     res.status(500).json({ error: (err as any).message });
@@ -54,23 +125,103 @@ router.post('/generate-quiz', async (req: any, res) => {
 router.post('/report', async (req: any, res) => {
   const userId = req.user.id;
   try {
-    const { data } = await supabase.from('learning_logs').select('*').eq('user_id', userId);
-    let logs: string[] = data ? data.map((l: any) => l.log_text) : [];
-    
-    const profile = await analyzePersonaLog(logs);
-    
-    await supabase.from('persona_profiles').upsert({
-      user_id: userId,
-      strategic: profile.strategic,
-      empathy: profile.empathy,
-      people_oriented: profile.people_oriented,
-      meticulousness: profile.meticulousness,
-      pragmatic: profile.pragmatic,
-      ai_comments: profile.ai_comments,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id' });
+    const { data: userData } = await supabase
+      .from('users')
+      .select('name')
+      .eq('id', userId)
+      .single();
 
-    res.json(profile);
+    const { data, error: logsError } = await supabase
+      .from('learning_logs')
+      .select('id, scene_id, log_text, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+
+    if (logsError) {
+      throw new Error(`读取 learning_logs 失败: ${explainSupabaseError(logsError)}`);
+    }
+
+    const logRows = data || [];
+    const logs: string[] = logRows.map((l: any) => l.log_text).filter(Boolean);
+    const reportSignature = buildReportSignature(logRows);
+    console.log(`[Report] user=${userId} logs=${logs.length}`);
+
+    const cachedReport = reportCache.get(userId);
+    if (cachedReport?.signature === reportSignature) {
+      return res.json({
+        ...cachedReport.response,
+        analysis_warning: cachedReport.response.analysis_warning || '日志未变化，已复用上一次画像结果。',
+      });
+    }
+
+    let profile: any;
+    let analysisSource = 'persona-agent';
+    let analysisWarning = '';
+
+    if (logs.length === 0) {
+      profile = buildNoLogProfile();
+      analysisSource = 'no-logs';
+      analysisWarning = '当前账号没有读取到 learning_logs 记录。';
+    } else {
+      try {
+        profile = await analyzePersonaWithAgent(logs, userData?.name);
+      } catch (agentError) {
+        console.error('Persona agent failed:', agentError);
+        profile = buildAgentErrorProfile(agentError);
+        analysisSource = 'persona-agent-error';
+        analysisWarning = `Persona agent 未成功运行。日志条数：${logs.length}。报告已停止使用旧版 analyzePersonaLog 兜底。`;
+      }
+    }
+    
+    if (analysisSource === 'persona-agent') {
+      await supabase.from('persona_profiles').upsert({
+        user_id: userId,
+        strategic: profile.strategic,
+        empathy: profile.empathy,
+        people_oriented: profile.people_oriented,
+        meticulousness: profile.meticulousness,
+        pragmatic: profile.pragmatic,
+        ai_comments: profile.ai_comments,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'user_id' });
+    }
+
+    const responsePayload = {
+      ...profile,
+      log_count: logs.length,
+      recent_logs: buildLogEvidence(logs),
+      analysis_source: analysisSource,
+      analysis_warning: analysisWarning,
+    };
+
+    if (analysisSource === 'persona-agent' || analysisSource === 'no-logs') {
+      reportCache.set(userId, { signature: reportSignature, response: responsePayload });
+    }
+
+    res.json(responsePayload);
+  } catch (err) {
+    res.status(500).json({ error: (err as any).message });
+  }
+});
+
+router.get('/logs', async (req: any, res) => {
+  const userId = req.user.id;
+  try {
+    const { data, error } = await supabase
+      .from('learning_logs')
+      .select('id, scene_id, log_text, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      throw new Error(`读取 learning_logs 失败: ${explainSupabaseError(error)}`);
+    }
+
+    res.json({
+      count: data?.length || 0,
+      logs: data || [],
+    });
   } catch (err) {
     res.status(500).json({ error: (err as any).message });
   }
@@ -80,7 +231,7 @@ router.post('/log', async (req: any, res) => {
   const { sceneId, text } = req.body;
   const userId = req.user.id;
   try {
-    await supabase.from('learning_logs').insert([{ user_id: userId, scene_id: sceneId, log_text: text }]);
+    await writeLearningLog(userId, sceneId, text);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: (err as any).message });
@@ -332,12 +483,8 @@ router.post('/story/start', async (req: any, res) => {
       return res.status(500).json({ error: '剧本配置错误' });
     }
 
-    // 记录开始日志
-    await supabase.from('learning_logs').insert([{
-      user_id: userId,
-      scene_id: sceneId,
-      log_text: `[剧情开始] 进入场景：${script.title}`
-    }]);
+    // 日志失败不能阻断剧情加载。
+    await writeLearningLog(userId, sceneId, `[剧情开始] 进入场景：${script.title}`);
 
     // 直接使用预定义内容（不调用 AI）
     res.json({
@@ -384,12 +531,7 @@ router.post('/story/choose', async (req: any, res) => {
       return res.status(400).json({ error: '无效的选择' });
     }
 
-    // 记录选择日志
-    await supabase.from('learning_logs').insert([{
-      user_id: userId,
-      scene_id: sceneId,
-      log_text: `[选择] ${choice.text}`
-    }]);
+    await writeLearningLog(userId, sceneId, `[选择] ${choice.text}`);
 
     // 更新人格积累
     const newAccumulator = { ...personalityAccumulator };
@@ -408,11 +550,7 @@ router.post('/story/choose', async (req: any, res) => {
     // 直接使用预定义内容（不调用 AI）
     // 记录完成日志
     if (nextNode.nodeType === 'ending') {
-      await supabase.from('learning_logs').insert([{
-        user_id: userId,
-        scene_id: sceneId,
-        log_text: `[剧情结束] ${nextNode.endingType === 'success' ? '任务成功' : nextNode.endingType === 'partial' ? '部分成功' : '任务失败'}`
-      }]);
+      await writeLearningLog(userId, sceneId, `[剧情结束] ${nextNode.endingType === 'success' ? '任务成功' : nextNode.endingType === 'partial' ? '部分成功' : '任务失败'}`);
     }
 
     res.json({
